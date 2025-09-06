@@ -1,0 +1,278 @@
+import XCTest
+@testable import BetterAuthSwift
+
+final class BetterAuthSwiftTests: XCTestCase {
+    func testDecodeAPIResponseSuccess() throws {
+        let json = """
+        {
+          "success": true,
+          "data": {
+            "session": {"token": "t1", "expiresAt": "2025-01-01T00:00:00Z"},
+            "user": {"id": "u1", "email": "user@example.com"}
+          }
+        }
+        """.data(using: .utf8)!
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let resp = try decoder.decode(APIResponse<AuthData>.self, from: json)
+        XCTAssertEqual(resp.success, true)
+        XCTAssertEqual(resp.data?.session.token, "t1")
+        XCTAssertEqual(resp.data?.user?.id, "u1")
+    }
+
+    func testDecodeAPIResponseError() throws {
+        let json = """
+        {"error": {"code": "INVALID_CREDENTIALS", "message": "Invalid token"}}
+        """.data(using: .utf8)!
+        let resp = try JSONDecoder().decode(APIResponse<EmptyResponse>.self, from: json)
+        XCTAssertEqual(resp.success, false)
+        XCTAssertNil(resp.data)
+        XCTAssertEqual(resp.error?.code, "INVALID_CREDENTIALS")
+    }
+
+    func testClientGetSessionStoresToken() async throws {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockURLProtocol.self]
+        MockURLProtocol.requestHandler = { request in
+            XCTAssertEqual(request.url?.path, "/api/auth/session")
+            let body = """
+            {"success": true, "data": {"session": {"token": "abc123"}, "user": {"id": "u"}}}
+            """.data(using: .utf8)!
+            return (200, body)
+        }
+        let session = URLSession(configuration: config)
+        let store = InMemoryTokenStore()
+        let client = try BetterAuthClient(baseURL: "https://example.com", session: session, tokenStore: store)
+        let resp = try await client.getSession()
+        XCTAssertEqual(resp.data?.session.token, "abc123")
+        XCTAssertEqual(store.retrieveToken(), "abc123")
+    }
+
+    func testSignOutDeletesToken() async throws {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockURLProtocol.self]
+        MockURLProtocol.requestHandler = { request in
+            XCTAssertEqual(request.url?.path, "/api/auth/signout")
+            let body = """
+            {"success": true}
+            """.data(using: .utf8)!
+            return (200, body)
+        }
+        let session = URLSession(configuration: config)
+        let store = InMemoryTokenStore()
+        try store.storeToken("temp-token")
+        let client = try BetterAuthClient(baseURL: "https://example.com", session: session, tokenStore: store)
+        try await client.signOut()
+        XCTAssertNil(store.retrieveToken())
+    }
+
+    func testDecodeWithoutSuccessKey() throws {
+        let json = """
+        {"data": {"session": {"token": "t2"}, "user": {"id": "u2"}}}
+        """.data(using: .utf8)!
+        let resp = try JSONDecoder().decode(APIResponse<AuthData>.self, from: json)
+        XCTAssertEqual(resp.success, true)
+        XCTAssertEqual(resp.data?.session.token, "t2")
+    }
+
+    func testAuthorizationHeaderAttached() async throws {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockURLProtocol.self]
+        MockURLProtocol.requestHandler = { request in
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer tk")
+            let body = """
+            {"success": true, "data": {"session": {"token": "tk"}, "user": {"id": "u"}}}
+            """.data(using: .utf8)!
+            return (200, body)
+        }
+        let session = URLSession(configuration: config)
+        let store = InMemoryTokenStore()
+        try store.storeToken("tk")
+        let client = try BetterAuthClient(baseURL: "https://example.com", session: session, tokenStore: store)
+        _ = try await client.getSession()
+    }
+
+    func testNon200WithAPIErrorThrows() async {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockURLProtocol.self]
+        MockURLProtocol.requestHandler = { _ in
+            let body = """
+            {"error": {"code": "UNAUTHORIZED", "message": "unauth"}}
+            """.data(using: .utf8)!
+            return (401, body)
+        }
+        let session = URLSession(configuration: config)
+        let client = try! BetterAuthClient(baseURL: "https://example.com", session: session, tokenStore: InMemoryTokenStore())
+        do {
+            _ = try await client.getSession()
+            XCTFail("Expected error")
+        } catch let err as BetterAuthError {
+            switch err {
+            case .api(let apiErr):
+                XCTAssertEqual(apiErr.code, "UNAUTHORIZED")
+            default:
+                XCTFail("Unexpected error: \(err)")
+            }
+        } catch {
+            XCTFail("Wrong error type: \(error)")
+        }
+    }
+
+    func testRefreshSessionStoresToken() async throws {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockURLProtocol.self]
+        MockURLProtocol.requestHandler = { request in
+            XCTAssertEqual(request.url?.path, "/api/auth/refresh")
+            let body = """
+            {"success": true, "data": {"token": "newtk"}}
+            """.data(using: .utf8)!
+            return (200, body)
+        }
+        let session = URLSession(configuration: config)
+        let store = InMemoryTokenStore()
+        let client = try BetterAuthClient(baseURL: "https://example.com", session: session, tokenStore: store)
+        let resp = try await client.refreshSession()
+        XCTAssertEqual(resp.data?.token, "newtk")
+        XCTAssertEqual(store.retrieveToken(), "newtk")
+    }
+
+    func testGenericProviderSignInSendsBody() async throws {
+        struct FakeProvider: SignInTokenProvider {
+            func fetchToken() async throws -> String { "goog-token" }
+            var tokenKey: String { "accessToken" }
+        }
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockURLProtocol.self]
+        MockURLProtocol.requestHandler = { request in
+            XCTAssertEqual(request.url?.path, "/api/auth/signin/google")
+            let bodyData: Data? = {
+                if let data = request.httpBody { return data }
+                if let stream = request.httpBodyStream {
+                    stream.open()
+                    defer { stream.close() }
+                    var buffer = Data()
+                    let chunkSize = 1024
+                    let temp = UnsafeMutablePointer<UInt8>.allocate(capacity: chunkSize)
+                    defer { temp.deallocate() }
+                    while stream.hasBytesAvailable {
+                        let read = stream.read(temp, maxLength: chunkSize)
+                        if read > 0 { buffer.append(temp, count: read) } else { break }
+                    }
+                    return buffer
+                }
+                return nil
+            }()
+            if let data = bodyData, let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                XCTAssertEqual(obj["accessToken"] as? String, "goog-token")
+            } else {
+                XCTFail("Missing body")
+            }
+            let body = """
+            {"success": true, "data": {"session": {"token": "tk"}, "user": {"id": "u"}}}
+            """.data(using: .utf8)!
+            return (200, body)
+        }
+        let session = URLSession(configuration: config)
+        let store = InMemoryTokenStore()
+        let client = try BetterAuthClient(baseURL: "https://example.com", session: session, tokenStore: store)
+        let resp = try await client.signIn(with: FakeProvider(), providerName: "google")
+        XCTAssertEqual(resp.data?.session.token, "tk")
+        XCTAssertEqual(store.retrieveToken(), "tk")
+    }
+
+    func testCurrentTokenGetterAndNotificationsOnStore() async throws {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockURLProtocol.self]
+        MockURLProtocol.requestHandler = { _ in
+            let body = """
+            {"success": true, "data": {"session": {"token": "tok1"}, "user": {"id": "u"}}}
+            """.data(using: .utf8)!
+            return (200, body)
+        }
+        let session = URLSession(configuration: config)
+        let store = InMemoryTokenStore()
+        let client = try BetterAuthClient(baseURL: "https://example.com", session: session, tokenStore: store)
+        let exp = expectation(forNotification: .betterAuthTokenDidChange, object: nil) { note in
+            let newToken = note.userInfo?[BetterAuthTokenUserInfoKey.newToken] as? String
+            return newToken == "tok1"
+        }
+        _ = try await client.getSession()
+        wait(for: [exp], timeout: 1.0)
+        XCTAssertEqual(client.currentToken, "tok1")
+    }
+
+    func testNotificationsOnDelete() async throws {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockURLProtocol.self]
+        MockURLProtocol.requestHandler = { _ in
+            let body = """
+            {"success": true}
+            """.data(using: .utf8)!
+            return (200, body)
+        }
+        let session = URLSession(configuration: config)
+        let store = InMemoryTokenStore()
+        try store.storeToken("old")
+        let client = try BetterAuthClient(baseURL: "https://example.com", session: session, tokenStore: store)
+        let exp = expectation(forNotification: .betterAuthTokenDidChange, object: nil) { note in
+            let oldToken = note.userInfo?[BetterAuthTokenUserInfoKey.oldToken] as? String
+            return oldToken == "old"
+        }
+        try await client.signOut()
+        wait(for: [exp], timeout: 1.0)
+    }
+
+    func testCustomNotificationCenterUsed() async throws {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockURLProtocol.self]
+        MockURLProtocol.requestHandler = { _ in
+            let body = """
+            {"success": true, "data": {"session": {"token": "tokX"}, "user": {"id": "u"}}}
+            """.data(using: .utf8)!
+            return (200, body)
+        }
+        let session = URLSession(configuration: config)
+        let center = NotificationCenter()
+        let store = InMemoryTokenStore()
+        let client = try BetterAuthClient(baseURL: "https://example.com", session: session, tokenStore: store, notificationCenter: center)
+        let exp = expectation(description: "custom center")
+        let token = center.addObserver(forName: .betterAuthTokenDidChange, object: nil, queue: .main) { note in
+            let newToken = note.userInfo?[BetterAuthTokenUserInfoKey.newToken] as? String
+            if newToken == "tokX" { exp.fulfill() }
+        }
+        _ = try await client.getSession()
+        await fulfillment(of: [exp], timeout: 1.0)
+        center.removeObserver(token)
+    }
+}
+
+// MARK: - Test helpers
+
+final class InMemoryTokenStore: TokenStoring {
+    private var token: String?
+    func storeToken(_ token: String) throws { self.token = token }
+    func retrieveToken() -> String? { token }
+    func deleteToken() throws { token = nil }
+}
+
+final class MockURLProtocol: URLProtocol {
+    static var requestHandler: ((URLRequest) -> (Int, Data))?
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        guard let handler = MockURLProtocol.requestHandler else {
+            client?.urlProtocol(self, didFailWithError: NSError(domain: "NoHandler", code: 0))
+            return
+        }
+        let (status, data) = handler(request)
+        let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: data)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
+}

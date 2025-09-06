@@ -1,0 +1,39 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Swift Package Manager
+/.build/
+/Packages/
+/.swiftpm/
+.swiftpm/xcode/package.xcworkspace/xcuserdata/
+.swiftpm/xcode/xcuserdata/
+
+# Xcode
+DerivedData/
+xcuserdata/
+*.xcuserstate
+*.xccheckout
+*.moved-aside
+*.xcscmblueprint
+*.xcuserdatad/
+
+# IDEs
+.idea/
+.vscode/
+
+# Logs & temp
+*.log
+*.swp
+*.lock
+*.orig
+*.rej
+
+# Environment files
+.env
+.env.*
+
+# SPM resolution (libraries typically do not commit this)
+/Package.resolved
+

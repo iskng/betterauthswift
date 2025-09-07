@@ -136,15 +136,15 @@ final class BetterAuthSwiftTests: XCTestCase {
         XCTAssertEqual(resp.idToken, "idt")
     }
 
-    func testGenericProviderSignInSendsBody() async throws {
+    func testGenericProviderSignInSendsSocialBody() async throws {
         struct FakeProvider: SignInTokenProvider {
             func fetchToken() async throws -> String { "goog-token" }
-            var tokenKey: String { "accessToken" }
+            var tokenKey: String { "idToken" }
         }
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [MockURLProtocol.self]
         MockURLProtocol.requestHandler = { request in
-            XCTAssertEqual(request.url?.path, "/api/auth/signin/google")
+            XCTAssertEqual(request.url?.path, "/api/auth/sign-in/social")
             let bodyData: Data? = {
                 if let data = request.httpBody { return data }
                 if let stream = request.httpBodyStream {
@@ -163,7 +163,8 @@ final class BetterAuthSwiftTests: XCTestCase {
                 return nil
             }()
             if let data = bodyData, let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                XCTAssertEqual(obj["accessToken"] as? String, "goog-token")
+                XCTAssertEqual(obj["provider"] as? String, "google")
+                XCTAssertEqual(obj["idToken"] as? String, "goog-token")
             } else {
                 XCTFail("Missing body")
             }
@@ -180,7 +181,7 @@ final class BetterAuthSwiftTests: XCTestCase {
         XCTAssertEqual(store.retrieveToken(), "tk")
     }
 
-    func testAppleSignInUsesSocialEndpointWhenConfigured() async throws {
+    func testAppleSignInUsesSocialEndpoint() async throws {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [MockURLProtocol.self]
         MockURLProtocol.requestHandler = { request in
@@ -206,7 +207,7 @@ final class BetterAuthSwiftTests: XCTestCase {
         }
         let session = URLSession(configuration: config)
         let store = InMemoryTokenStore()
-        let client = try BetterAuthClient(baseURL: "https://example.com", session: session, tokenStore: store, signInMode: .providerInBodyIdTokenEnvelope)
+        let client = try BetterAuthClient(baseURL: "https://example.com", session: session, tokenStore: store)
         let resp = try await client.signInWithApple(identityToken: "apple-token")
         XCTAssertEqual(resp.data?.session.token, "st")
         XCTAssertEqual(store.retrieveToken(), "st")

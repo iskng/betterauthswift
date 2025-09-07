@@ -83,10 +83,7 @@ public struct AuthData: Codable {
     public let user: User?
 }
 
-/// Request body for Apple sign-in.
-public struct AppleSignInRequest: Codable {
-    public let identityToken: String
-}
+// Legacy AppleSignInRequest removed in favor of SocialSignInRequest
 
 /// Request body for session refresh.
 public struct RefreshRequest: Codable {

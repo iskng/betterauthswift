@@ -13,18 +13,13 @@ public final class BetterAuthClient {
     private let decoder: JSONDecoder
     private let encoder: JSONEncoder
     private let tokenStore: TokenStoring
-    public enum SignInMode {
-        case providerPathSimple                        // POST /signin/{provider} with {identityToken}
-        case providerInBodyIdTokenEnvelope            // POST /signin with {provider, idToken: { token, nonce?, accessToken? }}
-    }
-    private let signInMode: SignInMode
 
     /// Creates a client with default NotificationCenter-based token notifications.
     /// - Parameters:
     ///   - baseURL: Base server URL (e.g., "https://your-server.com").
     ///   - session: URLSession to use (default .shared).
     ///   - tokenStore: Token storage (default Keychain).
-    public init(baseURL: String, session: URLSession = .shared, tokenStore: TokenStoring = KeychainTokenStore(), signInMode: SignInMode = .providerPathSimple) throws {
+    public init(baseURL: String, session: URLSession = .shared, tokenStore: TokenStoring = KeychainTokenStore()) throws {
         guard let url = URL(string: baseURL) else { throw BetterAuthError.invalidURL(baseURL) }
         self.baseURL = url
         self.urlSession = session
@@ -32,7 +27,6 @@ public final class BetterAuthClient {
         self.decoder.dateDecodingStrategy = .iso8601
         self.encoder = JSONEncoder()
         self.encoder.dateEncodingStrategy = .iso8601
-        self.signInMode = signInMode
         if let notifying = tokenStore as? NotifyingTokenStore {
             self.tokenStore = notifying
         } else {
@@ -46,8 +40,8 @@ public final class BetterAuthClient {
     ///   - session: URLSession to use (default .shared).
     ///   - tokenStore: Token storage (default Keychain).
     ///   - notificationCenter: NotificationCenter used to emit `.betterAuthTokenDidChange` events.
-    public convenience init(baseURL: String, session: URLSession = .shared, tokenStore: TokenStoring = KeychainTokenStore(), notificationCenter: NotificationCenter, signInMode: SignInMode = .providerPathSimple) throws {
-        try self.init(baseURL: baseURL, session: session, tokenStore: NotifyingTokenStore(base: tokenStore, center: notificationCenter), signInMode: signInMode)
+    public convenience init(baseURL: String, session: URLSession = .shared, tokenStore: TokenStoring = KeychainTokenStore(), notificationCenter: NotificationCenter) throws {
+        try self.init(baseURL: baseURL, session: session, tokenStore: NotifyingTokenStore(base: tokenStore, center: notificationCenter))
     }
 
     /// Returns the currently stored Bearer token, if any.
@@ -70,24 +64,16 @@ public final class BetterAuthClient {
     /// Sign in with an existing Apple identity token (for testing or custom flows).
     @discardableResult
     public func signInWithApple(identityToken: String, nonce: String? = nil, accessToken: String? = nil, options: SocialSignInOptions? = nil) async throws -> APIResponse<AuthData> {
-        // Always use provider/idToken envelope format for Apple sign-in
-        switch signInMode {
-        case .providerPathSimple:
-            let body = AppleSignInRequest(identityToken: identityToken)
-            return try await postSignInPath(provider: "apple", body: body)
-        case .providerInBodyIdTokenEnvelope:
-            // Use Convex/OpenAPI social sign-in with idToken as string; request no redirect to receive token directly
-            let req = SocialSignInRequest(provider: "apple",
-                                          idToken: identityToken,
-                                          callbackURL: options?.callbackURL,
-                                          newUserCallbackURL: options?.newUserCallbackURL,
-                                          errorCallbackURL: options?.errorCallbackURL,
-                                          disableRedirect: options?.disableRedirect ?? "true",
-                                          scopes: options?.scopes,
-                                          requestSignUp: options?.requestSignUp,
-                                          loginHint: options?.loginHint)
-            return try await postSignInSocial(request: req)
-        }
+        let req = SocialSignInRequest(provider: "apple",
+                                      idToken: identityToken,
+                                      callbackURL: options?.callbackURL,
+                                      newUserCallbackURL: options?.newUserCallbackURL,
+                                      errorCallbackURL: options?.errorCallbackURL,
+                                      disableRedirect: options?.disableRedirect ?? "true",
+                                      scopes: options?.scopes,
+                                      requestSignUp: options?.requestSignUp,
+                                      loginHint: options?.loginHint)
+        return try await postSignInSocial(request: req)
     }
 
     /// Signs in using a custom provider that returns an access token.
@@ -98,15 +84,8 @@ public final class BetterAuthClient {
     @discardableResult
     public func signIn(with provider: SignInTokenProvider, providerName: String) async throws -> APIResponse<AuthData> {
         let token = try await provider.fetchToken()
-        switch signInMode {
-        case .providerPathSimple:
-            let body = ProviderTokenBody(key: provider.tokenKey, token: token)
-            return try await postSignInPath(provider: providerName, body: body)
-        case .providerInBodyIdTokenEnvelope:
-            // For generic providers under envelope mode, default to sending idToken as string
-            let req = SocialSignInRequest(provider: providerName, idToken: token, disableRedirect: "true")
-            return try await postSignInSocial(request: req)
-        }
+        let req = SocialSignInRequest(provider: providerName, idToken: token, disableRedirect: "true")
+        return try await postSignInSocial(request: req)
     }
 
     /// Fetches the current session from the backend.
@@ -162,20 +141,7 @@ public final class BetterAuthClient {
         }
     }
 
-    private func postSignInPath<B: Encodable>(provider: String, body: B) async throws -> APIResponse<AuthData> {
-        let url = baseURL.appendingPathComponent("api/auth/signin/\(provider)")
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try encoder.encode(body)
-        request.timeoutInterval = 30
-        let response: APIResponse<AuthData> = try await send(request)
-        if let token = response.data?.session.token {
-            try tokenStore.storeToken(token)
-        }
-        return response
-    }
+    // Removed legacy /signin/{provider} path to align with OpenAPI social endpoint
 
     private func postSignInSocial(request body: Encodable) async throws -> APIResponse<AuthData> {
         let url = baseURL.appendingPathComponent("api/auth/sign-in/social")
@@ -259,22 +225,7 @@ public final class BetterAuthClient {
 }
 
 // Encodable dynamic key body for provider tokens
-private struct ProviderTokenBody: Encodable {
-    let key: String
-    let token: String
-    func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: DynamicCodingKeys.self)
-        let codingKey = DynamicCodingKeys(stringValue: key)!
-        try container.encode(token, forKey: codingKey)
-    }
-}
-
-private struct DynamicCodingKeys: CodingKey {
-    var stringValue: String
-    init?(stringValue: String) { self.stringValue = stringValue }
-    var intValue: Int? { nil }
-    init?(intValue: Int) { return nil }
-}
+// Removed dynamic token body encoding used by legacy endpoints
 
 // Type-erased Encodable to re-encode unknown Encodable at runtime
 private struct AnyEncodable: Encodable {

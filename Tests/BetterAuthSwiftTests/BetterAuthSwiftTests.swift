@@ -185,7 +185,7 @@ final class BetterAuthSwiftTests: XCTestCase {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [MockURLProtocol.self]
         MockURLProtocol.requestHandler = { request in
-            XCTAssertEqual(request.url?.path, "/api/auth/signin")
+            XCTAssertEqual(request.url?.path, "/api/auth/sign-in/social")
             XCTAssertEqual(request.httpMethod, "POST")
             let bodyData: Data = {
                 if let d = request.httpBody { return d }

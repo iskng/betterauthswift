@@ -73,7 +73,7 @@ public final class BetterAuthClient {
         // Always use provider/idToken envelope format for Apple sign-in
         let envelope = IdTokenEnvelope(token: identityToken, nonce: nonce, accessToken: accessToken)
         let req = ProviderIdTokenSignInRequest(provider: "apple", idToken: envelope)
-        return try await postSignInBody(request: req)
+        return try await postSignInSocial(request: req)
     }
 
     /// Signs in using a custom provider that returns an access token.
@@ -96,7 +96,7 @@ public final class BetterAuthClient {
             // For generic providers under envelope mode, default to sending idToken.token
             let envelope = IdTokenEnvelope(token: token)
             let req = ProviderIdTokenSignInRequest(provider: providerName, idToken: envelope)
-            return try await postSignInBody(request: req)
+            return try await postSignInSocial(request: req)
         }
     }
 
@@ -170,8 +170,8 @@ public final class BetterAuthClient {
         return response
     }
 
-    private func postSignInBody(request body: ProviderIdTokenSignInRequest) async throws -> APIResponse<AuthData> {
-        let url = baseURL.appendingPathComponent("api/auth/signin")
+    private func postSignInSocial(request body: ProviderIdTokenSignInRequest) async throws -> APIResponse<AuthData> {
+        let url = baseURL.appendingPathComponent("api/auth/sign-in/social")
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Accept")

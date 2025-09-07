@@ -153,6 +153,24 @@ public final class BetterAuthClient {
         return try decoder.decode(RefreshTokenResponse.self, from: data)
     }
 
+    /// Fetches a Convex JWT associated with the current Better Auth session.
+    /// Uses Authorization: Bearer <session token> and returns the JSON `{ token }` value.
+    public func getConvexToken() async throws -> String {
+        let url = baseURL.appendingPathComponent("convex/token")
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        attachAuthorization(&request)
+        request.timeoutInterval = 30
+        let (data, response) = try await urlSession.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+            if let apiErr = try? decoder.decode(APIError.self, from: data) { throw BetterAuthError.api(apiErr) }
+            throw BetterAuthError.invalidResponse((response as? HTTPURLResponse)?.statusCode ?? 0, data)
+        }
+        struct TokenResp: Decodable { let token: String }
+        return try decoder.decode(TokenResp.self, from: data).token
+    }
+
     // MARK: - Private helpers
 
     private func attachAuthorization(_ request: inout URLRequest) {
@@ -188,6 +206,13 @@ public final class BetterAuthClient {
             if let social = try? decoder.decode(SocialSignInTokenResponse.self, from: data), let token = social.token {
                 try tokenStore.storeToken(token)
                 let session = Session(token: token, expiresAt: nil, createdAt: nil, updatedAt: nil)
+                let auth = AuthData(session: session, user: nil)
+                return APIResponse<AuthData>(success: true, data: auth, error: nil)
+            }
+            // Fallback: capture session token from response header if present (Set-Auth-Token)
+            if let headerToken = headerValue(http, name: "Set-Auth-Token"), !headerToken.isEmpty {
+                try tokenStore.storeToken(headerToken)
+                let session = Session(token: headerToken, expiresAt: nil, createdAt: nil, updatedAt: nil)
                 let auth = AuthData(session: session, user: nil)
                 return APIResponse<AuthData>(success: true, data: auth, error: nil)
             }
@@ -240,6 +265,16 @@ public final class BetterAuthClient {
         if let env = try? decoder.decode(APIErrorEnvelope.self, from: data), let err = env.error { return err }
         // Try direct APIError
         if let direct = try? decoder.decode(APIError.self, from: data) { return direct }
+        return nil
+    }
+
+    private func headerValue(_ http: HTTPURLResponse, name: String) -> String? {
+        for (k, v) in http.allHeaderFields {
+            if let ks = (k as? String)?.lowercased(), ks == name.lowercased() {
+                if let s = v as? String { return s }
+                return String(describing: v)
+            }
+        }
         return nil
     }
 }

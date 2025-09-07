@@ -13,6 +13,12 @@ public final class BetterAuthClient {
     private let decoder: JSONDecoder
     private let encoder: JSONEncoder
     private let tokenStore: TokenStoring
+    private static let iso8601Full: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+    private static let iso8601Basic = ISO8601DateFormatter()
 
     /// Creates a client with default NotificationCenter-based token notifications.
     /// - Parameters:
@@ -24,7 +30,30 @@ public final class BetterAuthClient {
         self.baseURL = url
         self.urlSession = session
         self.decoder = JSONDecoder()
-        self.decoder.dateDecodingStrategy = .iso8601
+        self.decoder.dateDecodingStrategy = .custom { decoder in
+            let container = try decoder.singleValueContainer()
+            // Try string ISO8601 (with or without fractional seconds)
+            if let str = try? container.decode(String.self) {
+                if let d = BetterAuthClient.iso8601Full.date(from: str) { return d }
+                if let d = BetterAuthClient.iso8601Basic.date(from: str) { return d }
+                if let num = Double(str) {
+                    // Interpret numeric string as epoch seconds or milliseconds
+                    if num > 1_000_000_000_000 { return Date(timeIntervalSince1970: num / 1000.0) }
+                    return Date(timeIntervalSince1970: num)
+                }
+                throw DecodingError.dataCorruptedError(in: container, debugDescription: "Invalid date string: \(str)")
+            }
+            // Try numeric timestamps (seconds or milliseconds)
+            if let millis = try? container.decode(Int64.self) {
+                if millis > 1_000_000_000_000 { return Date(timeIntervalSince1970: TimeInterval(millis) / 1000.0) }
+                return Date(timeIntervalSince1970: TimeInterval(millis))
+            }
+            if let secs = try? container.decode(Double.self) {
+                if secs > 1_000_000_000_000 { return Date(timeIntervalSince1970: secs / 1000.0) }
+                return Date(timeIntervalSince1970: secs)
+            }
+            throw DecodingError.dataCorruptedError(in: container, debugDescription: "Unsupported date format")
+        }
         self.encoder = JSONEncoder()
         self.encoder.dateEncodingStrategy = .iso8601
         if let notifying = tokenStore as? NotifyingTokenStore {

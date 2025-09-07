@@ -122,3 +122,92 @@ public struct ProviderIdTokenSignInRequest: Codable {
         self.idToken = idToken
     }
 }
+
+/// Social sign-in request (Convex/OpenAPI variant) with string idToken and optional parameters.
+public struct SocialSignInRequest: Codable {
+    public let provider: String
+    public let callbackURL: String?
+    public let newUserCallbackURL: String?
+    public let errorCallbackURL: String?
+    public let disableRedirect: String?
+    public let idToken: String
+    public let scopes: String?
+    public let requestSignUp: String?
+    public let loginHint: String?
+
+    public init(provider: String,
+                idToken: String,
+                callbackURL: String? = nil,
+                newUserCallbackURL: String? = nil,
+                errorCallbackURL: String? = nil,
+                disableRedirect: String? = nil,
+                scopes: String? = nil,
+                requestSignUp: String? = nil,
+                loginHint: String? = nil) {
+        self.provider = provider
+        self.idToken = idToken
+        self.callbackURL = callbackURL
+        self.newUserCallbackURL = newUserCallbackURL
+        self.errorCallbackURL = errorCallbackURL
+        self.disableRedirect = disableRedirect
+        self.scopes = scopes
+        self.requestSignUp = requestSignUp
+        self.loginHint = loginHint
+    }
+}
+
+/// Social sign-in token response variant: returns redirect flag and token.
+public struct SocialSignInTokenResponse: Codable {
+    public let redirect: Bool?
+    public let token: String?
+    public let url: String?
+}
+
+/// Optional parameters for social sign-in requests.
+public struct SocialSignInOptions: Sendable {
+    public var callbackURL: String?
+    public var newUserCallbackURL: String?
+    public var errorCallbackURL: String?
+    public var disableRedirect: String?
+    public var scopes: String?
+    public var requestSignUp: String?
+    public var loginHint: String?
+
+    public init(callbackURL: String? = nil,
+                newUserCallbackURL: String? = nil,
+                errorCallbackURL: String? = nil,
+                disableRedirect: String? = nil,
+                scopes: String? = nil,
+                requestSignUp: String? = nil,
+                loginHint: String? = nil) {
+        self.callbackURL = callbackURL
+        self.newUserCallbackURL = newUserCallbackURL
+        self.errorCallbackURL = errorCallbackURL
+        self.disableRedirect = disableRedirect
+        self.scopes = scopes
+        self.requestSignUp = requestSignUp
+        self.loginHint = loginHint
+    }
+}
+
+/// Refresh token request/response models.
+public struct RefreshTokenRequest: Codable {
+    public let providerId: String
+    public let accountId: String?
+    public let userId: String?
+
+    public init(providerId: String, accountId: String? = nil, userId: String? = nil) {
+        self.providerId = providerId
+        self.accountId = accountId
+        self.userId = userId
+    }
+}
+
+public struct RefreshTokenResponse: Codable {
+    public let accessToken: String?
+    public let accessTokenExpiresAt: Date?
+    public let idToken: String?
+    public let refreshToken: String?
+    public let refreshTokenExpiresAt: Date?
+    public let tokenType: String?
+}

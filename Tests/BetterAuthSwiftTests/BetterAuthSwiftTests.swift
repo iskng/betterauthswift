@@ -35,7 +35,7 @@ final class BetterAuthSwiftTests: XCTestCase {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [MockURLProtocol.self]
         MockURLProtocol.requestHandler = { request in
-            XCTAssertEqual(request.url?.path, "/api/auth/session")
+            XCTAssertEqual(request.url?.path, "/api/auth/get-session")
             let body = """
             {"success": true, "data": {"session": {"token": "abc123"}, "user": {"id": "u"}}}
             """.data(using: .utf8)!
@@ -53,7 +53,7 @@ final class BetterAuthSwiftTests: XCTestCase {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [MockURLProtocol.self]
         MockURLProtocol.requestHandler = { request in
-            XCTAssertEqual(request.url?.path, "/api/auth/signout")
+            XCTAssertEqual(request.url?.path, "/api/auth/sign-out")
             let body = """
             {"success": true}
             """.data(using: .utf8)!
@@ -119,22 +119,21 @@ final class BetterAuthSwiftTests: XCTestCase {
         }
     }
 
-    func testRefreshSessionStoresToken() async throws {
+    func testRefreshTokenDecoding() async throws {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [MockURLProtocol.self]
         MockURLProtocol.requestHandler = { request in
-            XCTAssertEqual(request.url?.path, "/api/auth/refresh")
+            XCTAssertEqual(request.url?.path, "/api/auth/refresh-token")
             let body = """
-            {"success": true, "data": {"token": "newtk"}}
+            {"accessToken": "acc", "idToken": "idt", "refreshToken": "rft", "tokenType": "Bearer"}
             """.data(using: .utf8)!
             return (200, body)
         }
         let session = URLSession(configuration: config)
-        let store = InMemoryTokenStore()
-        let client = try BetterAuthClient(baseURL: "https://example.com", session: session, tokenStore: store)
-        let resp = try await client.refreshSession()
-        XCTAssertEqual(resp.data?.token, "newtk")
-        XCTAssertEqual(store.retrieveToken(), "newtk")
+        let client = try BetterAuthClient(baseURL: "https://example.com", session: session, tokenStore: InMemoryTokenStore())
+        let resp = try await client.refreshToken(providerId: "apple")
+        XCTAssertEqual(resp.accessToken, "acc")
+        XCTAssertEqual(resp.idToken, "idt")
     }
 
     func testGenericProviderSignInSendsBody() async throws {
@@ -181,7 +180,7 @@ final class BetterAuthSwiftTests: XCTestCase {
         XCTAssertEqual(store.retrieveToken(), "tk")
     }
 
-    func testAppleSignInAlwaysSendsProviderAndIdTokenEnvelope() async throws {
+    func testAppleSignInUsesSocialEndpointWhenConfigured() async throws {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [MockURLProtocol.self]
         MockURLProtocol.requestHandler = { request in
@@ -199,16 +198,15 @@ final class BetterAuthSwiftTests: XCTestCase {
             }()
             let json = try! JSONSerialization.jsonObject(with: bodyData) as! [String: Any]
             XCTAssertEqual(json["provider"] as? String, "apple")
-            let idToken = json["idToken"] as? [String: Any]
-            XCTAssertEqual(idToken?["token"] as? String, "apple-token")
+            XCTAssertEqual(json["idToken"] as? String, "apple-token")
             let resp = """
-            {"success": true, "data": {"session": {"token": "st"}, "user": {"id": "u"}}}
+            {"redirect": false, "token": "st"}
             """.data(using: .utf8)!
             return (200, resp)
         }
         let session = URLSession(configuration: config)
         let store = InMemoryTokenStore()
-        let client = try BetterAuthClient(baseURL: "https://example.com", session: session, tokenStore: store)
+        let client = try BetterAuthClient(baseURL: "https://example.com", session: session, tokenStore: store, signInMode: .providerInBodyIdTokenEnvelope)
         let resp = try await client.signInWithApple(identityToken: "apple-token")
         XCTAssertEqual(resp.data?.session.token, "st")
         XCTAssertEqual(store.retrieveToken(), "st")

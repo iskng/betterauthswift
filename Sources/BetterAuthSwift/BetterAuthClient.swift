@@ -57,11 +57,11 @@ public final class BetterAuthClient {
     /// - Parameter presentationAnchor: Optional UI anchor for the Apple sign-in sheet.
     /// - Returns: APIResponse containing session and optional user.
     @discardableResult
-    public func signInWithApple(presentationAnchor: ASPresentationAnchor? = nil, nonce: String? = nil, accessToken: String? = nil) async throws -> APIResponse<AuthData> {
+    public func signInWithApple(presentationAnchor: ASPresentationAnchor? = nil, nonce: String? = nil, accessToken: String? = nil, options: SocialSignInOptions? = nil) async throws -> APIResponse<AuthData> {
         #if canImport(AuthenticationServices)
         let provider = AppleSignInTokenProvider(presentationAnchor: presentationAnchor)
         let token = try await provider.fetchToken()
-        return try await signInWithApple(identityToken: token, nonce: nonce, accessToken: accessToken)
+        return try await signInWithApple(identityToken: token, nonce: nonce, accessToken: accessToken, options: options)
         #else
         throw BetterAuthError.invalidURL("AuthenticationServices not available on this platform")
         #endif
@@ -69,11 +69,25 @@ public final class BetterAuthClient {
 
     /// Sign in with an existing Apple identity token (for testing or custom flows).
     @discardableResult
-    public func signInWithApple(identityToken: String, nonce: String? = nil, accessToken: String? = nil) async throws -> APIResponse<AuthData> {
+    public func signInWithApple(identityToken: String, nonce: String? = nil, accessToken: String? = nil, options: SocialSignInOptions? = nil) async throws -> APIResponse<AuthData> {
         // Always use provider/idToken envelope format for Apple sign-in
-        let envelope = IdTokenEnvelope(token: identityToken, nonce: nonce, accessToken: accessToken)
-        let req = ProviderIdTokenSignInRequest(provider: "apple", idToken: envelope)
-        return try await postSignInSocial(request: req)
+        switch signInMode {
+        case .providerPathSimple:
+            let body = AppleSignInRequest(identityToken: identityToken)
+            return try await postSignInPath(provider: "apple", body: body)
+        case .providerInBodyIdTokenEnvelope:
+            // Use Convex/OpenAPI social sign-in with idToken as string; request no redirect to receive token directly
+            let req = SocialSignInRequest(provider: "apple",
+                                          idToken: identityToken,
+                                          callbackURL: options?.callbackURL,
+                                          newUserCallbackURL: options?.newUserCallbackURL,
+                                          errorCallbackURL: options?.errorCallbackURL,
+                                          disableRedirect: options?.disableRedirect ?? "true",
+                                          scopes: options?.scopes,
+                                          requestSignUp: options?.requestSignUp,
+                                          loginHint: options?.loginHint)
+            return try await postSignInSocial(request: req)
+        }
     }
 
     /// Signs in using a custom provider that returns an access token.
@@ -84,18 +98,13 @@ public final class BetterAuthClient {
     @discardableResult
     public func signIn(with provider: SignInTokenProvider, providerName: String) async throws -> APIResponse<AuthData> {
         let token = try await provider.fetchToken()
-        // Always use envelope format for Apple, regardless of signInMode
-        if providerName.lowercased() == "apple" {
-            return try await signInWithApple(identityToken: token)
-        }
         switch signInMode {
         case .providerPathSimple:
             let body = ProviderTokenBody(key: provider.tokenKey, token: token)
             return try await postSignInPath(provider: providerName, body: body)
         case .providerInBodyIdTokenEnvelope:
-            // For generic providers under envelope mode, default to sending idToken.token
-            let envelope = IdTokenEnvelope(token: token)
-            let req = ProviderIdTokenSignInRequest(provider: providerName, idToken: envelope)
+            // For generic providers under envelope mode, default to sending idToken as string
+            let req = SocialSignInRequest(provider: providerName, idToken: token, disableRedirect: "true")
             return try await postSignInSocial(request: req)
         }
     }
@@ -103,7 +112,7 @@ public final class BetterAuthClient {
     /// Fetches the current session from the backend.
     /// - Returns: APIResponse containing session and user if authenticated.
     public func getSession() async throws -> APIResponse<AuthData> {
-        let url = baseURL.appendingPathComponent("api/auth/session")
+        let url = baseURL.appendingPathComponent("api/auth/get-session")
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
         request.setValue("application/json", forHTTPHeaderField: "Accept")
@@ -118,7 +127,7 @@ public final class BetterAuthClient {
 
     /// Signs out on the server and clears the local token.
     public func signOut() async throws {
-        let url = baseURL.appendingPathComponent("api/auth/signout")
+        let url = baseURL.appendingPathComponent("api/auth/sign-out")
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Accept")
@@ -128,23 +137,21 @@ public final class BetterAuthClient {
         try tokenStore.deleteToken()
     }
 
-    /// Refreshes the session (if supported by the backend).
-    /// - Parameter refreshToken: Optional refresh token if required by backend.
-    /// - Returns: APIResponse containing a new Session.
-    public func refreshSession(refreshToken: String? = nil) async throws -> APIResponse<Session> {
-        let url = baseURL.appendingPathComponent("api/auth/refresh")
+    /// Refreshes OAuth tokens using a refresh token (Convex/OpenAPI variant).
+    public func refreshToken(providerId: String, accountId: String? = nil, userId: String? = nil) async throws -> RefreshTokenResponse {
+        let url = baseURL.appendingPathComponent("api/auth/refresh-token")
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        attachAuthorization(&request)
-        request.httpBody = try encoder.encode(RefreshRequest(refreshToken: refreshToken))
+        request.httpBody = try encoder.encode(RefreshTokenRequest(providerId: providerId, accountId: accountId, userId: userId))
         request.timeoutInterval = 30
-        let response: APIResponse<Session> = try await send(request)
-        if let token = response.data?.token {
-            try tokenStore.storeToken(token)
+        let (data, response) = try await urlSession.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+            if let apiErr = try? decoder.decode(APIError.self, from: data) { throw BetterAuthError.api(apiErr) }
+            throw BetterAuthError.invalidResponse((response as? HTTPURLResponse)?.statusCode ?? 0, data)
         }
-        return response
+        return try decoder.decode(RefreshTokenResponse.self, from: data)
     }
 
     // MARK: - Private helpers
@@ -170,19 +177,40 @@ public final class BetterAuthClient {
         return response
     }
 
-    private func postSignInSocial(request body: ProviderIdTokenSignInRequest) async throws -> APIResponse<AuthData> {
+    private func postSignInSocial(request body: Encodable) async throws -> APIResponse<AuthData> {
         let url = baseURL.appendingPathComponent("api/auth/sign-in/social")
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try encoder.encode(body)
+        request.httpBody = try encoder.encode(AnyEncodable(body))
         request.timeoutInterval = 30
-        let response: APIResponse<AuthData> = try await send(request)
-        if let token = response.data?.session.token {
-            try tokenStore.storeToken(token)
+        do {
+            let (data, urlResponse) = try await urlSession.data(for: request)
+            guard let http = urlResponse as? HTTPURLResponse else { throw BetterAuthError.invalidResponse(0, data) }
+            // First, try normal APIResponse<AuthData>. If completely empty, fall through.
+            if let resp = try? decoder.decode(APIResponse<AuthData>.self, from: data) {
+                let isCompletelyEmpty = (resp.success == nil && resp.data == nil && resp.error == nil)
+                if !isCompletelyEmpty {
+                    if let err = resp.error { throw BetterAuthError.api(err) }
+                    if let token = resp.data?.session.token { try tokenStore.storeToken(token) }
+                    if !(200...299).contains(http.statusCode) { throw BetterAuthError.invalidResponse(http.statusCode, data) }
+                    return resp
+                }
+            }
+            // Fallback: social token response { redirect, token }
+            if let social = try? decoder.decode(SocialSignInTokenResponse.self, from: data), let token = social.token {
+                try tokenStore.storeToken(token)
+                let session = Session(token: token, expiresAt: nil, createdAt: nil, updatedAt: nil)
+                let auth = AuthData(session: session, user: nil)
+                return APIResponse<AuthData>(success: true, data: auth, error: nil)
+            }
+            throw BetterAuthError.decoding(DecodingError.dataCorrupted(.init(codingPath: [], debugDescription: "Unexpected social sign-in response")))
+        } catch let e as BetterAuthError {
+            throw e
+        } catch {
+            throw BetterAuthError.network(error)
         }
-        return response
     }
 
     private func send<T: Codable>(_ request: URLRequest) async throws -> APIResponse<T> {
@@ -200,15 +228,19 @@ public final class BetterAuthClient {
                 }
             }
 
-            do {
-                let decoded = try decoder.decode(APIResponse<T>.self, from: data)
-                if let apiError = decoded.error { throw BetterAuthError.api(apiError) }
-                return decoded
-            } catch let err as BetterAuthError {
-                throw err
-            } catch {
-                throw BetterAuthError.decoding(error)
+            // Try wrapper response
+            if let decoded = try? decoder.decode(APIResponse<T>.self, from: data) {
+                let isCompletelyEmpty = (decoded.success == nil && decoded.data == nil && decoded.error == nil)
+                if !isCompletelyEmpty {
+                    if let apiError = decoded.error { throw BetterAuthError.api(apiError) }
+                    return decoded
+                }
             }
+            // Fallback: direct payload T
+            if let direct = try? decoder.decode(T.self, from: data) {
+                return APIResponse<T>(success: true, data: direct, error: nil)
+            }
+            throw BetterAuthError.decoding(DecodingError.dataCorrupted(.init(codingPath: [], debugDescription: "Unable to decode response")))
         } catch let error as BetterAuthError {
             throw error
         } catch {
@@ -242,4 +274,11 @@ private struct DynamicCodingKeys: CodingKey {
     init?(stringValue: String) { self.stringValue = stringValue }
     var intValue: Int? { nil }
     init?(intValue: Int) { return nil }
+}
+
+// Type-erased Encodable to re-encode unknown Encodable at runtime
+private struct AnyEncodable: Encodable {
+    private let _encode: (Encoder) throws -> Void
+    init(_ encodable: Encodable) { self._encode = encodable.encode }
+    func encode(to encoder: Encoder) throws { try _encode(encoder) }
 }

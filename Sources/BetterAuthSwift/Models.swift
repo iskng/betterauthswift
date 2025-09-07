@@ -96,3 +96,29 @@ public struct RefreshRequest: Codable {
 
 /// Empty payload for endpoints that return only `success`/`error`.
 public struct EmptyResponse: Codable {}
+
+// MARK: - Alternate sign-in payloads
+
+/// Envelope for sending an ID token with optional nonce/accessToken.
+public struct IdTokenEnvelope: Codable {
+    public let token: String
+    public let nonce: String?
+    public let accessToken: String?
+
+    public init(token: String, nonce: String? = nil, accessToken: String? = nil) {
+        self.token = token
+        self.nonce = nonce
+        self.accessToken = accessToken
+    }
+}
+
+/// Sign-in request that includes the provider in the body and an `idToken` envelope.
+public struct ProviderIdTokenSignInRequest: Codable {
+    public let provider: String
+    public let idToken: IdTokenEnvelope
+
+    public init(provider: String, idToken: IdTokenEnvelope) {
+        self.provider = provider
+        self.idToken = idToken
+    }
+}

@@ -181,6 +181,39 @@ final class BetterAuthSwiftTests: XCTestCase {
         XCTAssertEqual(store.retrieveToken(), "tk")
     }
 
+    func testAppleSignInAlwaysSendsProviderAndIdTokenEnvelope() async throws {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockURLProtocol.self]
+        MockURLProtocol.requestHandler = { request in
+            XCTAssertEqual(request.url?.path, "/api/auth/signin")
+            XCTAssertEqual(request.httpMethod, "POST")
+            let bodyData: Data = {
+                if let d = request.httpBody { return d }
+                if let s = request.httpBodyStream {
+                    s.open(); defer { s.close() }
+                    var data = Data(); var buf = [UInt8](repeating: 0, count: 1024)
+                    while s.hasBytesAvailable { let r = s.read(&buf, maxLength: buf.count); if r > 0 { data.append(buf, count: r) } else { break } }
+                    return data
+                }
+                return Data()
+            }()
+            let json = try! JSONSerialization.jsonObject(with: bodyData) as! [String: Any]
+            XCTAssertEqual(json["provider"] as? String, "apple")
+            let idToken = json["idToken"] as? [String: Any]
+            XCTAssertEqual(idToken?["token"] as? String, "apple-token")
+            let resp = """
+            {"success": true, "data": {"session": {"token": "st"}, "user": {"id": "u"}}}
+            """.data(using: .utf8)!
+            return (200, resp)
+        }
+        let session = URLSession(configuration: config)
+        let store = InMemoryTokenStore()
+        let client = try BetterAuthClient(baseURL: "https://example.com", session: session, tokenStore: store)
+        let resp = try await client.signInWithApple(identityToken: "apple-token")
+        XCTAssertEqual(resp.data?.session.token, "st")
+        XCTAssertEqual(store.retrieveToken(), "st")
+    }
+
     func testCurrentTokenGetterAndNotificationsOnStore() async throws {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [MockURLProtocol.self]

@@ -35,7 +35,7 @@ final class BetterAuthSwiftTests: XCTestCase {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [MockURLProtocol.self]
         MockURLProtocol.requestHandler = { request in
-            XCTAssertEqual(request.url?.path, "/api/auth/get-session")
+            XCTAssertEqual(request.url?.path, "/get-session")
             let body = """
             {"success": true, "data": {"session": {"token": "abc123"}, "user": {"id": "u"}}}
             """.data(using: .utf8)!
@@ -53,7 +53,7 @@ final class BetterAuthSwiftTests: XCTestCase {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [MockURLProtocol.self]
         MockURLProtocol.requestHandler = { request in
-            XCTAssertEqual(request.url?.path, "/api/auth/sign-out")
+            XCTAssertEqual(request.url?.path, "/sign-out")
             let body = """
             {"success": true}
             """.data(using: .utf8)!
@@ -123,7 +123,7 @@ final class BetterAuthSwiftTests: XCTestCase {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [MockURLProtocol.self]
         MockURLProtocol.requestHandler = { request in
-            XCTAssertEqual(request.url?.path, "/api/auth/refresh-token")
+            XCTAssertEqual(request.url?.path, "/refresh-token")
             let body = """
             {"accessToken": "acc", "idToken": "idt", "refreshToken": "rft", "tokenType": "Bearer"}
             """.data(using: .utf8)!
@@ -144,7 +144,7 @@ final class BetterAuthSwiftTests: XCTestCase {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [MockURLProtocol.self]
         MockURLProtocol.requestHandler = { request in
-            XCTAssertEqual(request.url?.path, "/api/auth/sign-in/social")
+            XCTAssertEqual(request.url?.path, "/sign-in/social")
             let bodyData: Data? = {
                 if let data = request.httpBody { return data }
                 if let stream = request.httpBodyStream {
@@ -164,7 +164,13 @@ final class BetterAuthSwiftTests: XCTestCase {
             }()
             if let data = bodyData, let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
                 XCTAssertEqual(obj["provider"] as? String, "google")
-                XCTAssertEqual(obj["idToken"] as? String, "goog-token")
+                if let idTokenStr = obj["idToken"] as? String {
+                    XCTAssertEqual(idTokenStr, "goog-token")
+                } else if let idTokenObj = obj["idToken"] as? [String: Any] {
+                    XCTAssertEqual(idTokenObj["token"] as? String, "goog-token")
+                } else {
+                    XCTFail("Missing idToken")
+                }
             } else {
                 XCTFail("Missing body")
             }
@@ -185,7 +191,7 @@ final class BetterAuthSwiftTests: XCTestCase {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [MockURLProtocol.self]
         MockURLProtocol.requestHandler = { request in
-            XCTAssertEqual(request.url?.path, "/api/auth/sign-in/social")
+            XCTAssertEqual(request.url?.path, "/sign-in/social")
             XCTAssertEqual(request.httpMethod, "POST")
             let bodyData: Data = {
                 if let d = request.httpBody { return d }
@@ -199,7 +205,13 @@ final class BetterAuthSwiftTests: XCTestCase {
             }()
             let json = try! JSONSerialization.jsonObject(with: bodyData) as! [String: Any]
             XCTAssertEqual(json["provider"] as? String, "apple")
-            XCTAssertEqual(json["idToken"] as? String, "apple-token")
+            if let idTokenStr = json["idToken"] as? String {
+                XCTAssertEqual(idTokenStr, "apple-token")
+            } else if let idTokenObj = json["idToken"] as? [String: Any] {
+                XCTAssertEqual(idTokenObj["token"] as? String, "apple-token")
+            } else {
+                XCTFail("Missing idToken")
+            }
             let resp = """
             {"redirect": false, "token": "st"}
             """.data(using: .utf8)!

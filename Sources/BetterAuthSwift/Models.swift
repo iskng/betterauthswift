@@ -160,12 +160,45 @@ public struct SocialSignInTokenResponse: Codable {
     public let url: String?
 }
 
+/// Social sign-in envelope request with `idToken` object containing `token` and optional fields.
+public struct SocialSignInEnvelopeRequest: Codable {
+    public let provider: String
+    public let idToken: IdTokenEnvelope
+    public let callbackURL: String?
+    public let newUserCallbackURL: String?
+    public let errorCallbackURL: String?
+    public let disableRedirect: Bool?
+    public let scopes: String?
+    public let requestSignUp: String?
+    public let loginHint: String?
+
+    public init(provider: String,
+                idToken: IdTokenEnvelope,
+                callbackURL: String? = nil,
+                newUserCallbackURL: String? = nil,
+                errorCallbackURL: String? = nil,
+                disableRedirect: Bool? = nil,
+                scopes: String? = nil,
+                requestSignUp: String? = nil,
+                loginHint: String? = nil) {
+        self.provider = provider
+        self.idToken = idToken
+        self.callbackURL = callbackURL
+        self.newUserCallbackURL = newUserCallbackURL
+        self.errorCallbackURL = errorCallbackURL
+        self.disableRedirect = disableRedirect
+        self.scopes = scopes
+        self.requestSignUp = requestSignUp
+        self.loginHint = loginHint
+    }
+}
+
 /// Optional parameters for social sign-in requests.
 public struct SocialSignInOptions: Sendable {
     public var callbackURL: String?
     public var newUserCallbackURL: String?
     public var errorCallbackURL: String?
-    public var disableRedirect: String?
+    public var disableRedirect: Bool?
     public var scopes: String?
     public var requestSignUp: String?
     public var loginHint: String?
@@ -173,7 +206,7 @@ public struct SocialSignInOptions: Sendable {
     public init(callbackURL: String? = nil,
                 newUserCallbackURL: String? = nil,
                 errorCallbackURL: String? = nil,
-                disableRedirect: String? = nil,
+                disableRedirect: Bool? = nil,
                 scopes: String? = nil,
                 requestSignUp: String? = nil,
                 loginHint: String? = nil) {

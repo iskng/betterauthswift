@@ -64,16 +64,31 @@ public final class BetterAuthClient {
     /// Sign in with an existing Apple identity token (for testing or custom flows).
     @discardableResult
     public func signInWithApple(identityToken: String, nonce: String? = nil, accessToken: String? = nil, options: SocialSignInOptions? = nil) async throws -> APIResponse<AuthData> {
-        let req = SocialSignInRequest(provider: "apple",
-                                      idToken: identityToken,
-                                      callbackURL: options?.callbackURL,
-                                      newUserCallbackURL: options?.newUserCallbackURL,
-                                      errorCallbackURL: options?.errorCallbackURL,
-                                      disableRedirect: options?.disableRedirect ?? "true",
-                                      scopes: options?.scopes,
-                                      requestSignUp: options?.requestSignUp,
-                                      loginHint: options?.loginHint)
-        return try await postSignInSocial(request: req)
+        // Try spec-conforming string idToken first, then fallback to envelope if needed
+        let reqString = SocialSignInRequest(provider: "apple",
+                                            idToken: identityToken,
+                                            callbackURL: options?.callbackURL,
+                                            newUserCallbackURL: options?.newUserCallbackURL,
+                                            errorCallbackURL: options?.errorCallbackURL,
+                                            disableRedirect: (options?.disableRedirect ?? true) ? "true" : "false",
+                                            scopes: options?.scopes,
+                                            requestSignUp: options?.requestSignUp,
+                                            loginHint: options?.loginHint)
+        do {
+            return try await postSignInSocial(request: reqString)
+        } catch {
+            let envelope = IdTokenEnvelope(token: identityToken, nonce: nonce, accessToken: accessToken)
+            let req = SocialSignInEnvelopeRequest(provider: "apple",
+                                                  idToken: envelope,
+                                                  callbackURL: options?.callbackURL,
+                                                  newUserCallbackURL: options?.newUserCallbackURL,
+                                                  errorCallbackURL: options?.errorCallbackURL,
+                                                  disableRedirect: options?.disableRedirect ?? true,
+                                                  scopes: options?.scopes,
+                                                  requestSignUp: options?.requestSignUp,
+                                                  loginHint: options?.loginHint)
+            return try await postSignInSocial(request: req)
+        }
     }
 
     /// Signs in using a custom provider that returns an access token.
@@ -84,14 +99,19 @@ public final class BetterAuthClient {
     @discardableResult
     public func signIn(with provider: SignInTokenProvider, providerName: String) async throws -> APIResponse<AuthData> {
         let token = try await provider.fetchToken()
-        let req = SocialSignInRequest(provider: providerName, idToken: token, disableRedirect: "true")
-        return try await postSignInSocial(request: req)
+        let reqString = SocialSignInRequest(provider: providerName, idToken: token, disableRedirect: "true")
+        do {
+            return try await postSignInSocial(request: reqString)
+        } catch {
+            let reqEnv = SocialSignInEnvelopeRequest(provider: providerName, idToken: IdTokenEnvelope(token: token), disableRedirect: true)
+            return try await postSignInSocial(request: reqEnv)
+        }
     }
 
     /// Fetches the current session from the backend.
     /// - Returns: APIResponse containing session and user if authenticated.
     public func getSession() async throws -> APIResponse<AuthData> {
-        let url = baseURL.appendingPathComponent("api/auth/get-session")
+        let url = baseURL.appendingPathComponent("get-session")
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
         request.setValue("application/json", forHTTPHeaderField: "Accept")
@@ -106,7 +126,7 @@ public final class BetterAuthClient {
 
     /// Signs out on the server and clears the local token.
     public func signOut() async throws {
-        let url = baseURL.appendingPathComponent("api/auth/sign-out")
+        let url = baseURL.appendingPathComponent("sign-out")
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Accept")
@@ -118,7 +138,7 @@ public final class BetterAuthClient {
 
     /// Refreshes OAuth tokens using a refresh token (Convex/OpenAPI variant).
     public func refreshToken(providerId: String, accountId: String? = nil, userId: String? = nil) async throws -> RefreshTokenResponse {
-        let url = baseURL.appendingPathComponent("api/auth/refresh-token")
+        let url = baseURL.appendingPathComponent("refresh-token")
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Accept")
@@ -144,7 +164,7 @@ public final class BetterAuthClient {
     // Removed legacy /signin/{provider} path to align with OpenAPI social endpoint
 
     private func postSignInSocial(request body: Encodable) async throws -> APIResponse<AuthData> {
-        let url = baseURL.appendingPathComponent("api/auth/sign-in/social")
+        let url = baseURL.appendingPathComponent("sign-in/social")
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Accept")

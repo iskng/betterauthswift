@@ -16,9 +16,17 @@ Type-safe Swift client for the Better Auth backend API (v0.4.x). Supports Sign i
 - iOS 13.0+ or macOS 10.15+
 - Swift 5.9+
 
-## Installation (SPM)
+## Installation (Swift Package Manager)
 
-Add the package to Xcode or `Package.swift` as a dependency.
+Add `BetterAuthSwift` through Xcode or by updating your `Package.swift`:
+
+```swift
+dependencies: [
+    .package(url: "https://github.com/iskng/BetterAuthSwift.git", from: "0.1.0")
+]
+```
+
+Then add `BetterAuthSwift` to the target that should make requests to your Better Auth backend.
 
 ## Usage
 
@@ -66,6 +74,15 @@ struct GoogleProvider: SignInTokenProvider {
 
 let resp = try await client.signIn(with: GoogleProvider(), providerName: "google")
 ```
+
+### Fetch a Convex Token
+
+```swift
+let convexTokenResponse = try await client.getConvexToken()
+print(convexTokenResponse.jwt)
+```
+
+This helper method exchanges the current Better Auth session token for a Convex JWT when your backend is configured with Convex support.
 
 ## License
 
